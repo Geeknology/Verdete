@@ -1,24 +1,29 @@
-use std::{net::{Ipv4Addr, Ipv6Addr}, ops::Add};
+use std::{net::{Ipv4Addr, Ipv6Addr}, ops::Add, slice::Iter, str::FromStr, u8};
 
 use ldap3::{LdapConn, SearchEntry};
 use regex::Regex;
+use serde_json::{Error, Value};
+use serde_json_path::JsonPath;
 
 #[derive(Debug)]
-pub struct NameError{}
+pub struct AddrError{}
+
+#[derive(Debug)]
+pub struct AddressSpaceError{}
 
 pub trait AddressSpace{}
 
 #[derive(Debug)]
-pub struct AddressSpaceIpv6 {
+pub struct AddressSpaceIpv6Range {
     start: Ipv6Addr,
     end: Ipv6Addr,
     curr: Ipv6Addr,
     next: Ipv6Addr
 }
 
-impl AddressSpaceIpv6 {
-    fn new(start: Ipv6Addr, end: Ipv6Addr) -> AddressSpaceIpv6 {
-        return AddressSpaceIpv6 {
+impl AddressSpaceIpv6Range {
+    fn new(start: Ipv6Addr, end: Ipv6Addr) -> AddressSpaceIpv6Range {
+        return AddressSpaceIpv6Range {
             start,
             end,
             curr: start,
@@ -27,7 +32,7 @@ impl AddressSpaceIpv6 {
     }
 }
 
-impl Iterator for AddressSpaceIpv6 {
+impl Iterator for AddressSpaceIpv6Range {
     type Item = Ipv6Addr;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -40,19 +45,19 @@ impl Iterator for AddressSpaceIpv6 {
     }
 }
 
-impl AddressSpace for AddressSpaceIpv6{}
+impl AddressSpace for AddressSpaceIpv6Range{}
 
 #[derive(Debug)]
-pub struct AddressSpaceIpv4{
+pub struct AddressSpaceIpv4Range{
     start: Ipv4Addr,
     end: Ipv4Addr,
     curr: Ipv4Addr,
     next: Ipv4Addr
 }
 
-impl AddressSpaceIpv4 {
-    fn new(start: Ipv4Addr, end: Ipv4Addr) -> AddressSpaceIpv4 {
-        return AddressSpaceIpv4 {
+impl AddressSpaceIpv4Range {
+    fn new(start: Ipv4Addr, end: Ipv4Addr) -> AddressSpaceIpv4Range {
+        return AddressSpaceIpv4Range {
             start,
             end,
             curr: start,
@@ -61,7 +66,7 @@ impl AddressSpaceIpv4 {
     }
 }
 
-impl Iterator for AddressSpaceIpv4 {
+impl Iterator for AddressSpaceIpv4Range {
     type Item = Ipv4Addr;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -74,82 +79,152 @@ impl Iterator for AddressSpaceIpv4 {
     }
 }
 
-impl AddressSpace for AddressSpaceIpv4{}
+impl AddressSpace for AddressSpaceIpv4Range{}
 
 #[derive(Debug)]
-pub struct AddressSpaceDNS {
-    pub names: Vec<String>,
+pub struct AddressSpaceAddrList {
+    pub addrs: Vec<Address>,
 }
 
-impl AddressSpaceDNS {
-    fn new(names: Vec<String>) -> AddressSpaceDNS {
-        return AddressSpaceDNS {
-            names
+impl AddressSpaceAddrList {
+    fn new(addrs: Vec<Address>) -> AddressSpaceAddrList {
+        return AddressSpaceAddrList {
+            addrs
         }
     }
-    fn validate_dns(s: &str) -> Result<(), NameError> {
+
+    fn iter(&self) -> Iter<Address> {
+        return self.addrs.iter()
+    }
+
+    fn contains(&self, addr: &Address) -> bool {
+        return self.addrs.contains(addr);
+    }
+
+    fn len(&self) -> usize {
+        return self.addrs.len()
+    }
+}
+
+impl AddressSpace for AddressSpaceAddrList{}
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddressType {
+    Ipv4(Ipv4Addr),
+    Ipv6(Ipv6Addr),
+    DNS(String)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Address {
+    addr_type: AddressType
+}
+
+impl Address {
+    fn validate_dns(s: &str) -> Result<(), AddrError> {
         if s.len() > 253 || s.len() <= 0 || s.contains(" ") || s.starts_with("-") {
-            return Err(NameError{})
+            return Err(AddrError{})
         }
         let splitted_name = s.split('.');
         for i in splitted_name{
             if i.starts_with("-") || i.ends_with("-"){
-                return Err(NameError{})
+                return Err(AddrError{})
             }
             if i.is_empty() {
-                return Err(NameError{})
+                return Err(AddrError{})
             }
             let re = Regex::new(r"^([A-Za-z0-9-]{1, 63})+$").unwrap();
             match re.is_match(i) {
                 true => (),
-                false => return Err(NameError{})
+                false => return Err(AddrError{})
             }
         }
         Ok(())
     }
-}
+    
+    pub fn ipv4_from_str(s: &str) -> Result<Address, AddrError> {
+        match Ipv4Addr::from_str(s) {
+            Ok(addr) => return Ok(Address { addr_type: AddressType::Ipv4(addr) }),
+            Err(err) => return Err(AddrError { })
+        }
+    }
 
-impl AddressSpace for AddressSpaceDNS{}
+    pub fn ipv6_from_str(s: &str) -> Result<Address, AddrError> {
+        match Ipv6Addr::from_str(s) {
+            Ok(addr) => return Ok(Address { addr_type: AddressType::Ipv6(addr) }),
+            Err(err) => return Err(AddrError { })
+        }
+    }
+
+    pub fn dns_from_str(s: &str) -> Result<Address, AddrError> {
+        match Address::validate_dns(s) {
+            Ok(()) => return Ok(Address{ addr_type: AddressType::DNS(s.to_string()) }),
+            Err(err) => return Err(err)
+        }
+    }
+
+    pub fn from_str(s: &str) -> Result<Address, AddrError> {
+        if s.contains(":") {
+            match Address::ipv6_from_str(s) {
+                Ok(ipv6) => return Ok(ipv6),
+                Err(err) => return Err(AddrError { })
+            }
+        } else {
+            match Address::ipv4_from_str(s) {
+                Ok(addr) => return Ok(addr),
+                Err(_) => match Address::dns_from_str(s) {
+                    Ok(addr) => return Ok(addr),
+                    Err(e) => return Err(e)
+                }
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct AddressSpaceFactory {}
 
-impl AddressSpaceFactory {
-    pub fn dns(names: Vec<String>) -> Result<AddressSpaceDNS, NameError> {
-        let mut valid_names = Vec::new();
-        for i in names {
-            match AddressSpaceDNS::validate_dns(i.as_str()) {
-                Ok(()) => valid_names.push(i),
-                Err(a) => return Err(a)
+impl AddressSpaceFactory{
+    pub fn from_json(json_string: &str, selector: &str) -> Result<AddressSpaceAddrList, AddressSpaceError>{
+        if selector.len() == 0 {
+            return Err(AddressSpaceError {  })
+        }
+        let parsed: Value = serde_json::from_str(json_string).unwrap();
+        let selector = JsonPath::parse(selector).unwrap();
+        let query = selector.query(&parsed);
+        let results = query.all();
+        let mut parsed_addrs: Vec<Address> = Vec::new();
+        if results.len() <= 0 {
+            return Err(AddressSpaceError { })
+        } else {
+            for i in results {
+                if !(i.is_string()) {
+                    return Err(AddressSpaceError { })
+                }
+                parsed_addrs.push(Address::from_str(i.as_str().unwrap()).unwrap());
             }
         }
-        return Ok(AddressSpaceDNS::new(valid_names));
+        Ok(AddressSpaceAddrList::new(parsed_addrs))
     }
-    pub fn dns_from_json(json_string: &str) -> Result<AddressSpaceDNS, NameError>{
-        let parsed: Vec<String> = serde_json::from_str(json_string).unwrap();
-        let mut valid_names: Vec<String> = Vec::new();
-        for i in parsed {
-            match AddressSpaceDNS::validate_dns(i.as_str()) {
-                Ok(()) => valid_names.push(i),
-                Err(a) => return Err(a)
-            }
-        }
-        return Ok(AddressSpaceDNS { names: valid_names })
-    }
-    pub fn dns_from_json_file(path: &str) -> Result<AddressSpaceDNS, NameError> {
-        let json_string = std::fs::read_to_string(path).unwrap();
-        match AddressSpaceFactory::dns_from_json(json_string.as_str()) {
-            Ok(addr) => return Ok(addr),
-            Err(a) => return Err(a)
-        }
-    }
-    pub fn dns_from_ldap(srv_addr: &str, 
+    
+    /*pub fn from_yaml<T>(yaml_string: &str, selector: &str) -> Result<T, AddressSpaceError> where T: AddressSpace {}
+
+    pub fn from_toml<T>(toml_string: &str, selector: &str) -> Result<T, AddressSpaceError> where T: AddressSpace {}
+
+    pub fn from_csv<T>(csv_string: &str, column: &str, sep: Option<&str>) -> Result<T, AddressSpaceError> where T: AddressSpace {}
+
+    pub fn from_sql<T>(dialect: &str, query_string: &str, connection_string: &str) -> Result<T, AddressSpaceError> where T: AddressSpace {}
+
+    pub fn from_mongo<T>(selection: Option<&str>, projection: Option<&str>, connection_string: Option<&str>) -> Result<T, AddressSpaceError> where T: AddressSpace {}
+*/
+    pub fn from_ldap(srv_addr: &str, 
                      srv_port: Option<u16>, 
                      bind_dn: Option<&str>, 
                      bind_dn_password: Option<&str>, 
                      base_dn: &str, 
                      ldap_filter: &str, 
-                     use_ldaps: bool) -> Result<AddressSpaceDNS, NameError>{
+                     use_ldaps: bool) -> Result<AddressSpaceAddrList, AddrError>{
         let mut ldap = match use_ldaps {
             true => LdapConn::new(format!("ldaps://{srv_addr}:{}", srv_port.unwrap_or(636)).as_str()).unwrap(),
             false => LdapConn::new(format!("ldap://{srv_addr}:{}", srv_port.unwrap_or(389)).as_str()).unwrap()
@@ -165,54 +240,29 @@ impl AddressSpaceFactory {
             &ldap_filter,
             &["DnsHostName"]
         ).unwrap().success().unwrap();
-        let mut valid_names: Vec<String> = Vec::new();
+        let mut valid_names: Vec<Address> = Vec::new();
         for entry in rs {
             let se = SearchEntry::construct(entry).attrs["dNSHostName"][0].clone();
-            match AddressSpaceDNS::validate_dns(se.as_str()){
-                Ok(()) => valid_names.push(se),
+            match Address::validate_dns(se.as_str()){
+                Ok(()) => valid_names.push(Address::from_str(se.as_str()).unwrap()),
                 Err(a) => return Err(a)
             };
         }
         ldap.unbind().unwrap();
-        Ok(AddressSpaceDNS{ names: valid_names })
+        Ok(AddressSpaceAddrList::new(valid_names))
     }
-    pub fn dns_from_yaml(yaml_string: &str) -> Result<AddressSpaceDNS, NameError> {
-        let parsed: Vec<String> = serde_yaml::from_str(yaml_string).unwrap();
-        let mut valid_names: Vec<String> = Vec::new();
-        for i in parsed {
-            match AddressSpaceDNS::validate_dns(i.as_str()) {
-                Ok(()) => valid_names.push(i),
-                Err(a) => return Err(a)
-            }
-        }
-        return Ok(AddressSpaceDNS::new(valid_names))
+    pub fn ipv4_range(start: Ipv4Addr, end: Ipv4Addr) -> AddressSpaceIpv4Range {
+        return AddressSpaceIpv4Range::new(start, end)
     }
-
-    pub fn dns_from_yaml_file(path: &str) -> Result<AddressSpaceDNS, NameError> {
-        let yaml_string = std::fs::read_to_string(path).unwrap();
-        match AddressSpaceFactory::dns_from_yaml(yaml_string.as_str()) {
-            Ok(addr) => return Ok(addr),
-            Err(a) => return Err(a)
-        }
-    }
-    pub fn ipv4_range(start: Ipv4Addr, end: Ipv4Addr) -> AddressSpaceIpv4 {
-        return AddressSpaceIpv4::new(start, end)
-    }
-    pub fn ipv4(address: Ipv4Addr) -> AddressSpaceIpv4 {
-        return AddressSpaceIpv4::new(address, address)
-    }
-    pub fn ipv6_range(start: Ipv6Addr, end: Ipv6Addr) -> AddressSpaceIpv6 {
-        return AddressSpaceIpv6::new(start, end)
-    }
-    pub fn ipv6(address: Ipv6Addr) -> AddressSpaceIpv6 {
-        return AddressSpaceIpv6::new(address, address)
+    pub fn ipv6_range(start: Ipv6Addr, end: Ipv6Addr) -> AddressSpaceIpv6Range {
+        return AddressSpaceIpv6Range::new(start, end)
     }
 }
 #[cfg(test)]
 pub mod as_test{
     use std::net::{Ipv4Addr, Ipv6Addr};
 
-    use crate::probe::address_space::AddressSpaceDNS;
+    use crate::probe::address_space::{Address, AddressSpaceAddrList, AddressType};
 
     use super::{AddressSpace, AddressSpaceFactory};
     #[test]
@@ -231,7 +281,7 @@ pub mod as_test{
                                     "abcdefghijklmnopqrstuvwxyz-1234567890.verdete.com"
                                     ];
         for i in names {
-            assert!(AddressSpaceDNS::validate_dns(i).err().is_none());
+            assert!(Address::validate_dns(i).err().is_none());
         }
     }
 
@@ -255,21 +305,38 @@ pub mod as_test{
                                     r"/"
                                     ];
         for i in names {
-            assert!(!(AddressSpaceDNS::validate_dns(i).err().is_none()));
+            assert!(!(Address::validate_dns(i).err().is_none()));
         }
     }
 
     #[test]
-    fn dns_iteration_is_ok() {
-        let dns = AddressSpaceFactory::dns(vec!["SRVFUVS20311.fuvs.br".to_string(),
-                                                                          "SRVFUVS22558.fuvs.br".to_string(),
-                                                                          "SRVFUVS24414.fuvs.br".to_string(),
-                                                                          "DIRHCSL39170.fuvs.br".to_string()]).unwrap();
-        let mut last = "".to_string();
-        for i in dns.names {
-            assert!(i != last);
-            last = i;
+    fn ipv4_list_from_json_is_ok() {
+        let json_string = std::fs::read_to_string("/etc/verdete/json_ipv4_list.json").unwrap();
+        let ipv4_list = AddressSpaceFactory::from_json(json_string.as_ref(), "$.def.hosts").unwrap();
+        assert!(ipv4_list.iter().len() == 10);
+        assert!(ipv4_list.contains(&Address::from_str("192.168.0.1").unwrap()));
+        assert!(ipv4_list.contains(&Address::from_str("192.168.0.2").unwrap()));
+        assert!(ipv4_list.contains(&Address::from_str("192.168.0.5").unwrap()));
+        for i in ipv4_list.iter() {
+            assert!(matches!(i.addr_type, AddressType::Ipv4(_)))
         }
+    }
+
+    #[test]
+    fn ipv6_list_from_json_is_ok() {
+        let json_string = std::fs::read_to_string("/etc/verdete/json_ipv6_list.json").unwrap();
+        let ipv6_list = AddressSpaceFactory::from_json(json_string.as_ref(), "def.hosts").unwrap();
+        assert!(ipv6_list.len() == 10);
+    }
+
+    #[test]
+    fn dns_list_from_json_is_ok() {
+        let json_string = std::fs::read_to_string("/etc/verdete/json_dns_list.json").unwrap();
+        let dns_list = AddressSpaceFactory::from_json(json_string.as_ref(), "def.hosts").unwrap();
+        assert!(dns_list.iter().len() == 10);
+        /*for i in dns_list.iter() {
+            assert!(Address::validate_dns(i.as_str()).err().is_none());
+        }*/
     }
 
     #[test]
@@ -315,62 +382,13 @@ pub mod as_test{
 
     #[test]
     fn ldap_as_loading_is_ok(){
-        let names = AddressSpaceFactory::dns_from_ldap("SRVFUVS24414", 
+        let names = AddressSpaceFactory::from_ldap("SRVFUVS24414", 
                                                         None,
                                                          Some("CN=VerdeteTest,OU=SISTEMAS,OU=INFORMATICA,OU=_UNIDADE CENTRAL,DC=fuvs,DC=br"),
                                                 Some("123456"),
                                                          "OU=COMPUTADORES INFORMATICA,OU=INFORMATICA,OU=_UNIDADE CENTRAL,DC=fuvs,DC=br", 
                                                      "(objectClass=computer)",
                                                        false).unwrap();
-        assert!(names.names.len() > 0);
-        for i in names.names {
-            assert!(AddressSpaceDNS::validate_dns(i.as_str()).err().is_none());
-        }
+        assert!(names.iter().len() > 0);
     }
-
-    #[test]
-    fn json_dns_loading_is_ok(){
-        let hosts = "[\"SRVFUVS20311.fuvs.br\",\"SRVFUVS22558.fuvs.br\",\"SRVFUVS24414.fuvs.br\"]";
-        let dns = AddressSpaceFactory::dns_from_json(hosts).unwrap();
-        assert!(dns.names[0] == "SRVFUVS20311.fuvs.br");
-        assert!(dns.names[1] == "SRVFUVS22558.fuvs.br");
-        assert!(dns.names[2] == "SRVFUVS24414.fuvs.br");
-        let dns2 = AddressSpaceFactory::dns_from_json_file("/etc/verdete/json_test.json").unwrap();
-        assert!(dns2.names[0] == "SRVFUVS20311.fuvs.br");
-        assert!(dns2.names[1] == "SRVFUVS22558.fuvs.br");
-        assert!(dns2.names[2] == "SRVFUVS24414.fuvs.br");
-    }
-
-    #[test]
-    fn yaml_dns_loading_is_ok(){
-        let hosts = "---\n- SRVFUVS20311.fuvs.br\n- SRVFUVS22558.fuvs.br\n- SRVFUVS24414.fuvs.br";
-        let dns = AddressSpaceFactory::dns_from_yaml(hosts).unwrap();
-        assert!(dns.names[0] == "SRVFUVS20311.fuvs.br");
-        assert!(dns.names[1] == "SRVFUVS22558.fuvs.br");
-        assert!(dns.names[2] == "SRVFUVS24414.fuvs.br");
-        let dns2 = AddressSpaceFactory::dns_from_yaml_file("/etc/verdete/yaml_test.yaml").unwrap();
-        assert!(dns2.names[0] == "SRVFUVS20311.fuvs.br");
-        assert!(dns2.names[1] == "SRVFUVS22558.fuvs.br");
-        assert!(dns2.names[2] == "SRVFUVS24414.fuvs.br");
-    }
-
-    // TODO
-    #[test]
-    fn csv_dns_loading_is_ok(){}
-
-    // TODO
-    #[test]
-    fn psql_dns_loading_is_ok(){}
-
-    // TODO
-    #[test]
-    fn mysql_dns_loading_is_ok(){}
-
-    // TODO
-    #[test]
-    fn mongo_dns_loading_is_ok(){}
-
-    // TODO
-    #[test]
-    fn probe_dns_loading_is_ok(){}
 }
