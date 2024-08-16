@@ -1,6 +1,9 @@
-pub trait Stage {
-    async fn execute(){}
-    async fn get_data(){}
+use serde_json::{Map, Value};
+
+use super::ProbeData;
+
+pub trait Stage{
+    fn execute(&self, data: &mut ProbeData);
 }
 #[cfg(test)]
 pub mod stage_test {
