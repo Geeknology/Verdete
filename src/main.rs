@@ -1,3 +1,5 @@
+use std::net::Ipv4Addr;
+
 pub mod probe;
 pub mod ansible;
 pub mod config;
@@ -6,7 +8,6 @@ pub mod database;
 pub mod web;
 
 fn main() {
-    println!("Hello, world!");
 }
 
 
