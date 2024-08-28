@@ -6,6 +6,8 @@ pub mod config;
 pub mod logging;
 pub mod database;
 pub mod web;
+pub mod loader;
+pub mod auth;
 
 fn main() {
 }

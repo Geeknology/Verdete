@@ -3,9 +3,21 @@ name = "verdete"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "http_test"
+path = "test/http.rs"
+
 [dependencies]
 ldap3 = "0.11.5"
 regex = "1.10.6"
+reqwest = { version = "0.12.5", features = ["native-tls"] }
 serde_json = "1.0.125"
 serde_json_path = "0.6.7"
 serde_yaml = "0.9.34"
+tokio = {version = "1", features = ["full"]}
+actix-web = "4"
+yaml-path = "0.1.0"
+base64 = "0.22.1"
+awc = "3.5.1"
+toml = "0.8.19"
+csv = "1.3.0"

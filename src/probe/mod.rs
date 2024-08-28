@@ -1,7 +1,7 @@
 mod module;
 mod auto_reg;
 mod address_space;
-mod conditional;
+mod filtering;
 mod net_test;
 mod node_query;
 mod passive;
@@ -9,11 +9,14 @@ mod stage;
 mod store;
 mod preprocess;
 
-use std::{any::Any, collections::HashMap};
+use std::{any::Any, borrow::Borrow, collections::HashMap, ops::Add};
 
 use address_space::AddressSpace;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use stage::Stage;
+
+#[derive(Debug)]
+pub struct ProbeDataError {}
 
 #[derive(Debug)]
 pub struct ProbeData {
@@ -28,11 +31,16 @@ impl ProbeData {
             results: Map::new()
         }
     }
+
+    fn set_stage_data(&mut self, stage_name: &str, data: Map<String, Value>) -> Result<(), ProbeDataError>{
+        self.stages.insert(stage_name.to_string(), Value::Object(data));
+        Ok(())
+    }
 }
 
-pub struct Probe<T> where T: AddressSpace {
+pub struct Probe <T> where T: AddressSpace{
     address_space: T,
-    stages: Vec<Box<dyn Stage>>,
+    stages: Vec<Stage>,
     data: ProbeData
 }
 
@@ -45,15 +53,18 @@ impl<T> Probe<T> where T: AddressSpace {
         }
     }
     
-    fn add_stage(&mut self, stage: Box<dyn Stage>, index: usize) {
+    /*fn add_stage(&mut self, stage: Box<dyn Stage>, index: usize) {
         self.stages.insert(index, stage);
     }
 
     fn execute(&mut self) {
         for i in self.stages.iter() {
-            i.execute(&mut self.data);
+            for j in self.address_space.iter() {
+                let data = i.execute(&j, &mut self.data.results);
+                self.data.set_stage_data(i.get_name(), data).unwrap();
+            }
         }
-    }
+    }*/
 
     fn get_stage_data(&self, stage_name: &str) -> Option<&Value> {
         return self.data.stages.get(stage_name)
@@ -62,63 +73,52 @@ impl<T> Probe<T> where T: AddressSpace {
     fn get_results_data(&self, stage_name: &str) -> Option<&Value> {
         return self.data.results.get(stage_name)
     }
+
+    fn stage_data(execution_time_total_s: f64, execution_time_avg: f64, execution_status: bool, execution_status_code: u16) -> Map<String, Value>{
+        let mut data = Map::new();
+        data.insert("execution_time_total_s".to_string(), json!(execution_time_total_s));
+        data.insert("execution_time_avg".to_string(), json!(execution_time_avg));
+        data.insert("execution_status".to_string(), json!(execution_status));
+        data.insert("execution_status_code".to_string(), json!(execution_status_code));
+        return data
+    }
 }
 #[cfg(test)]
 pub mod probe_test {
-    use std::any::{type_name_of_val, Any};
-    use std::borrow::{Borrow, BorrowMut};
-    use std::collections::HashMap;
-
     use serde_json::{json, Map, Number, Value};
-
+    use crate::loader::URI;
     use crate::probe::ProbeData;
-
-    use super::address_space::AddressSpaceFactory;
+    use super::address_space::{Address, AddressSpace, AddressSpaceFactory};
     use super::stage::Stage;
     use super::Probe;
-
-    struct TestStage {}
-
-    impl Stage for TestStage{
-        fn execute(&self, data: &mut ProbeData) {
-            let mut result: Map<String, Value> = Map::new();
-            result.insert("Is_This_a_Test".to_string(), Value::Bool(true));
-            result.insert("This_is_Five".to_string(), json!(5));
-            result.insert("This_is_a_String".to_string(), json!("Hello, Friend"));
-            result.insert("This_is_an_Array".to_string(), Value::Array(vec![json!(1), json!(2), json!(3)]));
-            result.insert("This_is_Another_Object".to_string(), json!(Map::new()));
-            data.stages.insert("TestStage".to_string(), Value::Number(Number::from(0)));
-            data.results.insert("TestStage".to_string(), json!(result));
-        }
-    }
-
-    /*
-    #[test]
-    fn probe_construction_ok(){
-        let addr_space = AddressSpaceFactory::dns(vec!["SRVFUVS24414.fuvs.br".to_string(), "SRVFUVS22558.fuvs.br".to_string(), "SRVFUVS20311.fuvs.br".to_string()]).unwrap();
-        let mut probe = Probe::new(addr_space);
-        assert!(probe.address_space.names.contains(&"SRVFUVS24414.fuvs.br".to_string()));
-        assert!(probe.address_space.names.len() == 3);
+/*
+    #[tokio::test]
+    async fn probe_construction_ok(){
+        let addr_space = AddressSpaceFactory::from(URI::File { path: "/etc/verdete/json_dns_list.json" }, crate::loader::ResourceType::JSON("def.hosts")).await.unwrap();
+        let mut probe = Probe::new(Box::new(addr_space));
         assert!(probe.stages.len() == 0);
-        let stage = TestStage {};
-        probe.add_stage(Box::new(stage), 0);
         assert!(probe.stages.len() == 1);
     }
-    */
-/*
-    #[test]
-    fn probe_add_data_ok() {
-        let test_stage = TestStage {};
-        let addr_space = AddressSpaceFactory::(vec!["SRVFUVS24414.fuvs.br".to_string(), "SRVFUVS22558.fuvs.br".to_string(), "SRVFUVS20311.fuvs.br".to_string()]).unwrap();
-        let mut probe = Probe::new(addr_space);
+    #[tokio::test]
+    async fn probe_add_data_ok() {
+        let test_stage = TestStage {
+            stage_name: "TestStage".to_string()
+        };
+        let addr_space = AddressSpaceFactory::from(URI::File { path: "/etc/verdete/json_dns_list.json" }, crate::loader::ResourceType::JSON("def.hosts")).await.unwrap();
+        let mut probe = Probe::new(Box::new(addr_space));
         probe.add_stage(Box::new(test_stage), 0);
+        let test_stage2 = TestStage {
+            stage_name: "TestStage2".to_string()
+        };
+        probe.add_stage(Box::new(test_stage2), 1);
         probe.execute();
-        assert!(probe.get_stage_data("TestStage").unwrap() == 0);
+        println!("{:?}", probe.data);
+        assert!(probe.get_stage_data("TestStage").unwrap().get("execution_time_total_s").unwrap().as_f64().unwrap() == 10.0);
         assert!(probe.get_results_data("TestStage").unwrap()["Is_This_a_Test"] == true);
         assert!(probe.get_results_data("TestStage").unwrap()["This_is_Five"] == 5);
         assert!(probe.get_results_data("TestStage").unwrap()["This_is_a_String"] == "Hello, Friend");
         assert!(probe.get_results_data("TestStage").unwrap()["This_is_an_Array"] == json!(vec![1, 2, 3]));
-        assert!(probe.get_results_data("TestStage").unwrap()["This_is_Another_Object"] == json!(Map::new()))
+        assert!(probe.get_results_data("TestStage").unwrap()["This_is_Another_Object"] == json!(Map::new()));
     }
 */
     #[test]

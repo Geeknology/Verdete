@@ -1,0 +1,8 @@
+Node Query - Extract (Batch ETL)
+Agent Query - Extract (Batch ETL)
+Passive - Extract (Streaming ETL)
+Auto Registration - Extract (Streaming ETL)
+Filtering - Transform (Batch ETL and Streaming ETL)
+Aggregation - Transform (Batch ETL and Streaming ETL)
+Preprocessing - Transform (Batch ETL and Streaming ETL)
+Store - Load (Batch ETL and Streaming ETL)

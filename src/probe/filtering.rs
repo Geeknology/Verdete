@@ -1,5 +1,5 @@
 #[cfg(test)]
-pub mod conditional_test{
+pub mod filtering_test{
     #[test]
     fn conditional_logic_asserts_true(){}
 

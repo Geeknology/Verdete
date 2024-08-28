@@ -1,9 +1,13 @@
-use std::{net::{Ipv4Addr, Ipv6Addr}, ops::Add, slice::Iter, str::FromStr, u8};
+use std::{any::Any, collections::BTreeMap, net::{IpAddr, Ipv4Addr, Ipv6Addr}, ops::Add, os::unix::process::parent_id, slice::Iter, str::FromStr, u8};
 
+use awc::http::header::DNT;
 use ldap3::{LdapConn, SearchEntry};
 use regex::Regex;
 use serde_json::{Error, Value};
 use serde_json_path::JsonPath;
+use yaml_path::Path;
+
+use crate::loader::{Loader, ResourceType, URI};
 
 #[derive(Debug)]
 pub struct AddrError{}
@@ -11,114 +15,109 @@ pub struct AddrError{}
 #[derive(Debug)]
 pub struct AddressSpaceError{}
 
-pub trait AddressSpace{}
-
+pub trait AddressSpace{
+    fn iter(&mut self) -> impl Iterator<Item = Address>;
+}
 #[derive(Debug)]
-pub struct AddressSpaceIpv6Range {
-    start: Ipv6Addr,
-    end: Ipv6Addr,
-    curr: Ipv6Addr,
-    next: Ipv6Addr
+pub struct AddressSpaceIpRange{
+    start: Address,
+    end: Address,
+    curr: Address,
+    next: Address
 }
 
-impl AddressSpaceIpv6Range {
-    fn new(start: Ipv6Addr, end: Ipv6Addr) -> AddressSpaceIpv6Range {
-        return AddressSpaceIpv6Range {
-            start,
-            end,
-            curr: start,
-            next: start
+impl AddressSpaceIpRange{
+    fn new(start: Address, end: Address) -> Result<AddressSpaceIpRange, AddressSpaceError> {
+        if std::mem::discriminant(&start) == std::mem::discriminant(&end) {
+            return Ok(AddressSpaceIpRange {
+                start: start.clone(),
+                end: end.clone(),
+                curr: start.clone(),
+                next: start.clone()
+            })
+        } else {
+            return Err(AddressSpaceError {  })
         }
     }
 }
 
-impl Iterator for AddressSpaceIpv6Range {
-    type Item = Ipv6Addr;
+impl<'a> Iterator for AddressSpaceIpRange{
+    type Item = Address;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.curr = self.next;
-        if self.curr > self.end {
-            return None
-        }
-        self.next = Ipv6Addr::from_bits(self.curr.to_bits() + 1);
-        return Some(self.curr)
-    }
-}
-
-impl AddressSpace for AddressSpaceIpv6Range{}
-
-#[derive(Debug)]
-pub struct AddressSpaceIpv4Range{
-    start: Ipv4Addr,
-    end: Ipv4Addr,
-    curr: Ipv4Addr,
-    next: Ipv4Addr
-}
-
-impl AddressSpaceIpv4Range {
-    fn new(start: Ipv4Addr, end: Ipv4Addr) -> AddressSpaceIpv4Range {
-        return AddressSpaceIpv4Range {
-            start,
-            end,
-            curr: start,
-            next: start
+        self.curr = self.next.clone();
+        if self.curr.is_ipv4() {
+            if self.curr.ipv4().unwrap() > self.end.ipv4().unwrap() {
+                return None
+            }
+            self.next = Address::Ipv4(Ipv4Addr::from_bits(self.curr.ipv4().unwrap().to_bits() + 1));
+            return Some(self.curr.clone())
+        } else {
+            if self.curr.ipv6().unwrap() > self.end.ipv6().unwrap() {
+                return None
+            }
+            self.next = Address::Ipv6(Ipv6Addr::from_bits(self.curr.ipv6().unwrap().to_bits() + 1));
+            return Some(self.curr.clone())
         }
     }
 }
 
-impl Iterator for AddressSpaceIpv4Range {
-    type Item = Ipv4Addr;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.curr = self.next;
-        if self.curr > self.end {
-            return None
-        }
-        self.next = Ipv4Addr::from_bits(self.curr.to_bits() + 1);
-        return Some(self.curr)
+impl AddressSpace for AddressSpaceIpRange{
+    fn iter(&mut self) -> impl Iterator<Item = Address> {
+        return self
     }
 }
-
-impl AddressSpace for AddressSpaceIpv4Range{}
 
 #[derive(Debug)]
 pub struct AddressSpaceAddrList {
     pub addrs: Vec<Address>,
+    curr: usize,
+    next: usize
 }
 
 impl AddressSpaceAddrList {
     fn new(addrs: Vec<Address>) -> AddressSpaceAddrList {
         return AddressSpaceAddrList {
-            addrs
+            addrs,
+            curr: 0,
+            next: 0
         }
     }
 
-    fn iter(&self) -> Iter<Address> {
-        return self.addrs.iter()
-    }
-
-    fn contains(&self, addr: &Address) -> bool {
+    pub fn contains(&self, addr: &Address) -> bool {
         return self.addrs.contains(addr);
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         return self.addrs.len()
     }
 }
 
-impl AddressSpace for AddressSpaceAddrList{}
+impl Iterator for AddressSpaceAddrList {
+    type Item = Address;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.curr = self.next;
+        if self.next >= self.len() {
+            return None
+        }
+        self.next += 1;
+        return Some(self.addrs.get(self.curr).unwrap().to_owned())
+    }
+}
+
+impl AddressSpace for AddressSpaceAddrList{
+    fn iter(&mut self) -> impl Iterator<Item = Address> {
+        return self
+    }
+}
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AddressType {
+pub enum Address {
     Ipv4(Ipv4Addr),
     Ipv6(Ipv6Addr),
     DNS(String)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Address {
-    addr_type: AddressType
 }
 
 impl Address {
@@ -143,81 +142,194 @@ impl Address {
         Ok(())
     }
     
-    pub fn ipv4_from_str(s: &str) -> Result<Address, AddrError> {
+    fn ipv4_from_str(s: &str) -> Result<Address, AddrError> {
         match Ipv4Addr::from_str(s) {
-            Ok(addr) => return Ok(Address { addr_type: AddressType::Ipv4(addr) }),
+            Ok(addr) => return Ok(Address::Ipv4(addr)),
             Err(err) => return Err(AddrError { })
         }
     }
 
-    pub fn ipv6_from_str(s: &str) -> Result<Address, AddrError> {
+    fn ipv6_from_str(s: &str) -> Result<Address, AddrError> {
         match Ipv6Addr::from_str(s) {
-            Ok(addr) => return Ok(Address { addr_type: AddressType::Ipv6(addr) }),
+            Ok(addr) => return Ok(Address::Ipv6(addr)),
             Err(err) => return Err(AddrError { })
         }
     }
 
-    pub fn dns_from_str(s: &str) -> Result<Address, AddrError> {
+    fn dns_from_str(s: &str) -> Result<Address, AddrError> {
         match Address::validate_dns(s) {
-            Ok(()) => return Ok(Address{ addr_type: AddressType::DNS(s.to_string()) }),
+            Ok(()) => return Ok(Address::DNS(s.to_string())),
             Err(err) => return Err(err)
         }
     }
 
     pub fn from_str(s: &str) -> Result<Address, AddrError> {
-        if s.contains(":") {
-            match Address::ipv6_from_str(s) {
-                Ok(ipv6) => return Ok(ipv6),
-                Err(err) => return Err(AddrError { })
+        match Address::ipv6_from_str(s) {
+            Ok(ipv6) => return Ok(ipv6),
+            Err(_) => match Address::ipv4_from_str(s) {
+                                    Ok(addr) => return Ok(addr),
+                                    Err(_) => match Address::dns_from_str(s) {
+                                        Ok(addr) => return Ok(addr),
+                                        Err(e) => return Err(e)
+                                    }
             }
-        } else {
-            match Address::ipv4_from_str(s) {
-                Ok(addr) => return Ok(addr),
-                Err(_) => match Address::dns_from_str(s) {
-                    Ok(addr) => return Ok(addr),
-                    Err(e) => return Err(e)
-                }
-            }
+        }
+    }
+
+    pub fn ipv4(&self) -> Result<&Ipv4Addr, AddrError>{
+        match &self {
+            Address::Ipv4(a) => return Ok(a),
+            _ => return Err(AddrError {})
+        }
+    }
+
+    pub fn ipv6(&self) -> Result<&Ipv6Addr, AddrError> {
+        match &self {
+            Address::Ipv6(a) => return Ok(a),
+            _ => return Err(AddrError {})
+        }
+    }
+
+    pub fn dns(&self) -> Result<&String, AddrError> {
+        match &self {
+            Address::DNS(a) => return Ok(a),
+            _ => return Err(AddrError {})
+        }
+    }
+
+    pub fn is_ipv4(&self) -> bool {
+        match &self {
+            Address::Ipv4(_) => true,
+            _ => false
+        }
+    }
+
+    pub fn is_ipv6(&self) -> bool {
+        match &self {
+            Address::Ipv6(_) => true,
+            _ => false
+        }
+    }
+
+    pub fn is_dns(&self) -> bool {
+        match &self {
+            Address::DNS(_) => true,
+            _ => false
+        }
+    }
+}
+
+impl ToString for Address {
+    fn to_string(&self) -> String {
+        match &self {
+            Address::DNS(a) => return a.to_string(),
+            Address::Ipv4(a) => return a.to_string(),
+            Address::Ipv6(a) => return a.to_string()
         }
     }
 }
 
 #[derive(Debug)]
-pub struct AddressSpaceFactory {}
+pub struct AddressSpaceFactory{}
 
 impl AddressSpaceFactory{
-    pub fn from_json(json_string: &str, selector: &str) -> Result<AddressSpaceAddrList, AddressSpaceError>{
+    pub async fn from<'a>(uri: URI<'a>, resource_type: ResourceType<'a>) -> Result<AddressSpaceAddrList, AddressSpaceError> {
+        let content = Loader::load(&uri).await.unwrap();
+        match resource_type {
+            ResourceType::CSV(column, sep) => AddressSpaceFactory::from_csv(content.as_str(), column, sep),
+            ResourceType::JSON(selector) => AddressSpaceFactory::from_json(content.as_str(), selector),
+            ResourceType::YAML(selector) => AddressSpaceFactory::from_yaml(content.as_str(), selector),
+            ResourceType::TOML(selector) => AddressSpaceFactory::from_toml(content.as_str(), selector),
+            //ResourceType::CSV(column, sep) => AddressSpaceFactory::from_csv(content.as_str(), column, sep),
+            _ => Err(AddressSpaceError {})
+        }
+    }
+
+    pub fn from_json(uri: &str, selector: &str) -> Result<AddressSpaceAddrList, AddressSpaceError>{
         if selector.len() == 0 {
             return Err(AddressSpaceError {  })
         }
-        let parsed: Value = serde_json::from_str(json_string).unwrap();
-        let selector = JsonPath::parse(selector).unwrap();
-        let query = selector.query(&parsed);
-        let results = query.all();
-        let mut parsed_addrs: Vec<Address> = Vec::new();
-        if results.len() <= 0 {
+        let json: Value = serde_json::from_str(uri).unwrap();
+        let parsed_selector: Vec<&str> = selector.split(".").collect();
+        let mut cursor = &json;
+        for i in parsed_selector {
+            cursor = cursor.get(i).unwrap();
+        }
+        let addrs_seq = cursor.as_array().unwrap();
+        if addrs_seq.len() <= 0 {
             return Err(AddressSpaceError { })
         } else {
-            for i in results {
-                if !(i.is_string()) {
-                    return Err(AddressSpaceError { })
-                }
-                parsed_addrs.push(Address::from_str(i.as_str().unwrap()).unwrap());
+            let mut addrs: Vec<Address> = Vec::new();
+            for i in addrs_seq {
+                addrs.push(Address::from_str(i.as_str().unwrap()).unwrap())
             }
+            return Ok(AddressSpaceAddrList::new(addrs))
         }
-        Ok(AddressSpaceAddrList::new(parsed_addrs))
     }
     
-    /*pub fn from_yaml<T>(yaml_string: &str, selector: &str) -> Result<T, AddressSpaceError> where T: AddressSpace {}
-
-    pub fn from_toml<T>(toml_string: &str, selector: &str) -> Result<T, AddressSpaceError> where T: AddressSpace {}
-
-    pub fn from_csv<T>(csv_string: &str, column: &str, sep: Option<&str>) -> Result<T, AddressSpaceError> where T: AddressSpace {}
+    pub fn from_yaml(yaml_string: &str, selector: &str) -> Result<AddressSpaceAddrList, AddressSpaceError> {
+        if selector.len() == 0 {
+            return Err(AddressSpaceError {  })
+        }
+        let yaml: serde_yaml::Value = serde_yaml::from_str(yaml_string).unwrap();
+        let parsed_selector: Vec<&str> = selector.split(".").collect();
+        let mut cursor = &yaml;
+        for i in parsed_selector {
+            cursor = cursor.get(i).unwrap();
+        }
+        let addrs_seq = cursor.as_sequence().unwrap();
+        if addrs_seq.len() == 0 {
+            return Err(AddressSpaceError {  })
+        }else {
+            let mut addrs: Vec<Address> = Vec::new();
+            for i in addrs_seq {
+                addrs.push(Address::from_str(i.as_str().unwrap()).unwrap())
+            }
+            return Ok(AddressSpaceAddrList::new(addrs))
+        }
+    }
+    
+    pub fn from_toml(toml_string: &str, selector: &str) -> Result<AddressSpaceAddrList, AddressSpaceError> {
+        if selector.len() == 0 {
+            return Err(AddressSpaceError { })
+        }
+        let toml: toml::Value = toml::from_str(toml_string).unwrap();
+        let parsed_selector: Vec<&str> = selector.split(".").collect();
+        let mut cursor = &toml;
+        for i in parsed_selector {
+            cursor = cursor.get(i).unwrap();
+        }
+        let addrs_seq = cursor.as_array().unwrap();
+        if addrs_seq.len() == 0 {
+            return Err(AddressSpaceError {  })
+        } else {
+            let mut addrs: Vec<Address> = Vec::new();
+            for i in addrs_seq {
+                addrs.push(Address::from_str(i.as_str().unwrap()).unwrap())
+            }
+            return Ok(AddressSpaceAddrList::new(addrs))
+        }
+    }
+    
+    pub fn from_csv(csv_string: &str, column: &str, sep: Option<&str>) -> Result<AddressSpaceAddrList, AddressSpaceError> {
+        if column.len() == 0 {
+            return Err(AddressSpaceError {})
+        }
+        let mut csv = csv::ReaderBuilder::new().delimiter(sep.unwrap_or(",").as_bytes()[0]).from_reader(csv_string.as_bytes());
+        let headers = csv.headers().unwrap();
+        let index = headers.as_slice().find(column).unwrap();
+        let mut addrs: Vec<Address> = Vec::new();
+        while let Some(results) = csv.records().next() {
+            addrs.push(Address::from_str(&results.unwrap()[index]).unwrap());
+        }
+        return Ok(AddressSpaceAddrList::new(addrs))
+    }
+    /*
 
     pub fn from_sql<T>(dialect: &str, query_string: &str, connection_string: &str) -> Result<T, AddressSpaceError> where T: AddressSpace {}
 
     pub fn from_mongo<T>(selection: Option<&str>, projection: Option<&str>, connection_string: Option<&str>) -> Result<T, AddressSpaceError> where T: AddressSpace {}
-*/
+    */
     pub fn from_ldap(srv_addr: &str, 
                      srv_port: Option<u16>, 
                      bind_dn: Option<&str>, 
@@ -251,20 +363,17 @@ impl AddressSpaceFactory{
         ldap.unbind().unwrap();
         Ok(AddressSpaceAddrList::new(valid_names))
     }
-    pub fn ipv4_range(start: Ipv4Addr, end: Ipv4Addr) -> AddressSpaceIpv4Range {
-        return AddressSpaceIpv4Range::new(start, end)
-    }
-    pub fn ipv6_range(start: Ipv6Addr, end: Ipv6Addr) -> AddressSpaceIpv6Range {
-        return AddressSpaceIpv6Range::new(start, end)
+    pub fn ip_range(start: Address, end: Address) -> AddressSpaceIpRange {
+        return AddressSpaceIpRange::new(start, end).unwrap()
     }
 }
 #[cfg(test)]
 pub mod as_test{
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::net::Ipv6Addr;
 
-    use crate::probe::address_space::{Address, AddressSpaceAddrList, AddressType};
+    use crate::{loader::{ResourceType, URI}, probe::address_space::Address};
 
-    use super::{AddressSpace, AddressSpaceFactory};
+    use super::AddressSpaceFactory;
     #[test]
     fn valid_names_return_ok(){
         let names = vec!["TEST", 
@@ -309,74 +418,187 @@ pub mod as_test{
         }
     }
 
-    #[test]
-    fn ipv4_list_from_json_is_ok() {
-        let json_string = std::fs::read_to_string("/etc/verdete/json_ipv4_list.json").unwrap();
-        let ipv4_list = AddressSpaceFactory::from_json(json_string.as_ref(), "$.def.hosts").unwrap();
-        assert!(ipv4_list.iter().len() == 10);
-        assert!(ipv4_list.contains(&Address::from_str("192.168.0.1").unwrap()));
-        assert!(ipv4_list.contains(&Address::from_str("192.168.0.2").unwrap()));
-        assert!(ipv4_list.contains(&Address::from_str("192.168.0.5").unwrap()));
-        for i in ipv4_list.iter() {
-            assert!(matches!(i.addr_type, AddressType::Ipv4(_)))
+    #[tokio::test]
+    async fn ipv4_list_from_json_is_ok() {
+        let ipv4_list = AddressSpaceFactory::from(
+                                                                    URI::File { path: "/etc/verdete/json_ipv4_list.json" }, 
+                                                                    ResourceType::JSON("def.hosts")
+                                                                ).await.unwrap();
+        assert!(ipv4_list.len() == 10);
+        for i in ipv4_list {
+            assert!(i.is_ipv4());
         }
     }
 
-    #[test]
-    fn ipv6_list_from_json_is_ok() {
-        let json_string = std::fs::read_to_string("/etc/verdete/json_ipv6_list.json").unwrap();
-        let ipv6_list = AddressSpaceFactory::from_json(json_string.as_ref(), "def.hosts").unwrap();
+    #[tokio::test]
+    async fn ipv6_list_from_json_is_ok() {
+        let ipv6_list = AddressSpaceFactory::from(
+                                                                    URI::File { path: "/etc/verdete/json_ipv6_list.json" }, 
+                                                                    ResourceType::JSON("def.hosts")
+                                                                ).await.unwrap();
         assert!(ipv6_list.len() == 10);
+        for i in ipv6_list {
+            assert!(i.is_ipv6());
+        }
     }
 
-    #[test]
-    fn dns_list_from_json_is_ok() {
-        let json_string = std::fs::read_to_string("/etc/verdete/json_dns_list.json").unwrap();
-        let dns_list = AddressSpaceFactory::from_json(json_string.as_ref(), "def.hosts").unwrap();
-        assert!(dns_list.iter().len() == 10);
-        /*for i in dns_list.iter() {
-            assert!(Address::validate_dns(i.as_str()).err().is_none());
-        }*/
+    #[tokio::test]
+    async fn dns_list_from_json_is_ok() {
+        let dns_list = AddressSpaceFactory::from(
+                                                                    URI::File { path: "/etc/verdete/json_dns_list.json" }, 
+                                                                    ResourceType::JSON("def.hosts")
+                                                                ).await.unwrap();
+        assert!(dns_list.len() == 5);
+        for i in dns_list {
+            assert!(i.is_dns());
+        }
+    }
+
+    #[tokio::test]
+    async fn ipv4_list_from_yaml_is_ok() {
+        let ipv4_list = AddressSpaceFactory::from(
+            URI::File { path: "/etc/verdete/yaml_ipv4_list.yaml" },
+            ResourceType::YAML("def.hosts")
+        ).await.unwrap();
+        assert!(ipv4_list.len() == 10);
+        for i in ipv4_list {
+            assert!(i.is_ipv4());
+        }
+    }
+
+    #[tokio::test]
+    async fn ipv6_list_from_yaml_is_ok() {
+        let ipv6_list = AddressSpaceFactory::from(
+            URI::File { path: "/etc/verdete/yaml_ipv6_list.yaml" },
+            ResourceType::YAML("def.hosts")
+        ).await.unwrap();
+        assert!(ipv6_list.len() == 5);
+        for i in ipv6_list {
+            assert!(i.is_ipv6());
+        }
+    }
+
+    #[tokio::test]
+    async fn dns_list_from_yaml_is_ok() {
+        let dns_list = AddressSpaceFactory::from(
+            URI::File { path: "/etc/verdete/yaml_dns_list.yaml"},
+            ResourceType::YAML("def.hosts")
+        ).await.unwrap();
+        assert!(dns_list.len() == 5);
+        for i in dns_list {
+            assert!(i.is_dns());
+        }
+    }
+
+    #[tokio::test]
+    async fn ipv4_list_from_toml_is_ok() {
+        let ipv4_list = AddressSpaceFactory::from(
+            URI::File { path: "/etc/verdete/toml_ipv4_list.toml" },
+            ResourceType::TOML("def.hosts")
+        ).await.unwrap();
+        assert!(ipv4_list.len() == 10);
+        for i in ipv4_list {
+            assert!(i.is_ipv4())
+        }
+    }
+
+    #[tokio::test]
+    async fn ipv6_list_from_toml_is_ok() {
+        let ipv6_list = AddressSpaceFactory::from(
+            URI::File { path: "/etc/verdete/toml_ipv6_list.toml" },
+            ResourceType::TOML("def.hosts")
+        ).await.unwrap();
+        assert!(ipv6_list.len() == 5);
+        for i in ipv6_list {
+            assert!(i.is_ipv6())
+        }
+    }
+
+    #[tokio::test]
+    async fn dns_list_from_toml_is_ok() {
+        let dns_list = AddressSpaceFactory::from(
+            URI::File { path: "/etc/verdete/toml_dns_list.toml" },
+            ResourceType::TOML("def.hosts")
+        ).await.unwrap();
+        assert!(dns_list.len() == 5);
+        for i in dns_list {
+            assert!(i.is_dns());
+        }
+    }
+
+    #[tokio::test]
+    async fn ipv4_list_from_csv_is_ok() {
+        let ipv4_list = AddressSpaceFactory::from(
+            URI::File { path: "/etc/verdete/csv_ipv4_list.csv"},
+            ResourceType::CSV("hosts", None)
+        ).await.unwrap();
+        assert!(ipv4_list.len() == 10);
+        for i in ipv4_list {
+            assert!(i.is_ipv4());
+        }
+    }
+
+    #[tokio::test]
+    async fn ipv6_list_from_csv_is_ok() {
+        let ipv6_list = AddressSpaceFactory::from(
+            URI::File { path: "/etc/verdete/csv_ipv6_list.csv" },
+            ResourceType::CSV("hosts", None)
+        ).await.unwrap();
+        assert!(ipv6_list.len() == 3);
+        for i in ipv6_list {
+            assert!(i.is_ipv6())
+        }
+    }
+
+    #[tokio::test]
+    async fn dns_list_from_csv_is_ok() {
+        let dns_list = AddressSpaceFactory::from(
+            URI::File { path: "/etc/verdete/csv_dns_list.csv" },
+            ResourceType::CSV("hosts", None)
+        ).await.unwrap();
+        assert!(dns_list.len() == 5);
+        for i in dns_list {
+            assert!(i.is_dns());
+        }
     }
 
     #[test]
     fn ipv4_range_iteration_is_ok(){
-        let range = AddressSpaceFactory::ipv4_range(Ipv4Addr::new(192, 168, 0, 1), Ipv4Addr::new(192, 168, 0, 255));
+        let range = AddressSpaceFactory::ip_range(Address::ipv4_from_str("192.168.0.1").unwrap(), Address::ipv4_from_str("192.168.0.255").unwrap());
         let mut fourth_octet = 0;
         for i in range {
-            println!("{:?} - {:?} - {:?}", i, i.octets()[3], fourth_octet);
-            assert!(i.octets()[3] > fourth_octet);
-            fourth_octet = i.octets()[3];
+            assert!(i.ipv4().unwrap().octets()[3] > fourth_octet);
+            fourth_octet = i.ipv4().unwrap().octets()[3];
         }
 
-        let range = AddressSpaceFactory::ipv4_range(Ipv4Addr::new(192, 168, 0, 1), Ipv4Addr::new(192, 168, 10, 0));
+        let range = AddressSpaceFactory::ip_range(Address::ipv4_from_str("192.168.0.1").unwrap(), Address::ipv4_from_str("192.168.10.0").unwrap());
         let mut third_octet = 0;
         let mut fourth_octet = 0;
         for i in range {
-            if i.octets()[3] < fourth_octet {
-                assert!(i.octets()[2] > third_octet)
+            if i.ipv4().unwrap().octets()[3] < fourth_octet {
+                assert!(i.ipv4().unwrap().octets()[2] > third_octet)
             } else {
-                assert!(i.octets()[3] > fourth_octet);
+                assert!(i.ipv4().unwrap().octets()[3] > fourth_octet);
             }
-            third_octet = i.octets()[2];
-            fourth_octet = i.octets()[3];
+            third_octet = i.ipv4().unwrap().octets()[2];
+            fourth_octet = i.ipv4().unwrap().octets()[3];
         }
     }
 
     #[test]
     fn ipv6_range_iteration_is_ok(){
-        let range = AddressSpaceFactory::ipv6_range(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0xffff));
+        let range = AddressSpaceFactory::ip_range(Address::ipv6_from_str("::1").unwrap(), Address::ipv6_from_str("::FFFF").unwrap());
         let mut last = Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0);
         for i in range {
-            assert!(i > last);
-            last = i;
+            assert!(i.ipv6().unwrap().clone() > last);
+            last = i.ipv6().unwrap().clone();
         }
 
-        let range = AddressSpaceFactory::ipv6_range(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0x1111, 0xffff));
+        let range = AddressSpaceFactory::ip_range(Address::ipv6_from_str("::1").unwrap(), Address::ipv6_from_str("::1:FFFF").unwrap());
         let mut last = Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0);
         for i in range {
-            assert!(i > last);
-            last = i;
+            assert!(i.ipv6().unwrap().clone() > last);
+            last = i.ipv6().unwrap().clone();
         }
     }
 
@@ -389,6 +611,6 @@ pub mod as_test{
                                                          "OU=COMPUTADORES INFORMATICA,OU=INFORMATICA,OU=_UNIDADE CENTRAL,DC=fuvs,DC=br", 
                                                      "(objectClass=computer)",
                                                        false).unwrap();
-        assert!(names.iter().len() > 0);
+        assert!(names.len() > 0);
     }
 }
