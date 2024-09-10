@@ -29,14 +29,17 @@ impl<'a> StageTree<'a> {
         let len = self.len();
         let mut cursor = &mut self.root;
         let mut iterations = 0;
-        while cursor.next().is_none() == false && cursor.next().unwrap().name != name {
+        while cursor.next().is_none() == false{
             if iterations >= len {
                 return Err(StageTreeError::NodeNotFound(name))
+            }
+            if cursor.next().unwrap().name == name {
+                return Ok(cursor.next().unwrap())
             }
             cursor = cursor.next().unwrap();
             iterations += 1;
         }
-        
+        return Err(StageTreeError::NodeNotFound(name))
     }
 
     pub fn append_node(&mut self, node: StageNode<'a>){
@@ -53,20 +56,19 @@ impl<'a> StageTree<'a> {
         let len = self.len();
         let mut cursor = &mut self.root;
         let mut iterations = 0;
-        while cursor.next().is_none() == false && cursor.next().unwrap().name != name {
+        while cursor.next().is_none() == false{
             if iterations >= len {
                 return Err(StageTreeError::NodeNotFound(name))
             }
             cursor = cursor.next().unwrap();
             iterations += 1;
+            if cursor.next().unwrap().name == name {
+                cursor.del_next();
+                self.len -= 1;
+                return Ok(())
+            }
         }
-        if cursor.next().unwrap().name == name{
-            cursor.del_next();
-            self.len -= 1;
-            return Ok(())
-        } else {
-            return Err(StageTreeError::NodeNotFound(name))
-        }
+        return Err(StageTreeError::NodeNotFound(name))
     }
 
     pub fn len(&self) -> usize {
@@ -144,10 +146,19 @@ pub mod stage_test {
     fn stage_list_del_node_is_ok(){}
 
     #[test]
-    fn stage_list_get_node_by_name_is_ok(){}
-
-    #[test]
-    fn stage_list_get_node_by_type_is_ok(){}
+    fn stage_list_get_node_by_name_is_ok(){
+        let mut tree = StageTree::new();
+        let mut node_01 = StageNode::new("Test01", Stage::AgentQuery);
+        let mut node_02 = StageNode::new("Test02", Stage::AgentQuery);
+        let mut node_03 = StageNode::new("Test03", Stage::AgentQuery);
+        tree.append_node(node_01);
+        tree.append_node(node_02);
+        tree.append_node(node_03);
+        assert!(tree.get_node("Test01".to_string()).next().unwrap().name == "Test02");
+        assert!(tree.get_node("Test02".to_string()).next().unrwap().name == "Test03");
+        assert!(tree.get_node("Test03".to_string()).next().is_none() == true);
+        assert!(tree.get_node("Test04".to_string()).is_ok() == false);
+    }
 
     #[test]
     fn stage_loading_is_ok(){}
