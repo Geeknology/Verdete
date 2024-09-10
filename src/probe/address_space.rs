@@ -1,4 +1,4 @@
-use std::{any::Any, collections::BTreeMap, net::{IpAddr, Ipv4Addr, Ipv6Addr}, ops::Add, os::unix::process::parent_id, slice::Iter, str::FromStr, u8};
+use std::{any::Any, collections::BTreeMap, net::{IpAddr, Ipv4Addr, Ipv6Addr}, ops::Add, slice::Iter, str::FromStr, u8};
 
 use awc::http::header::DNT;
 use ldap3::{LdapConn, SearchEntry};

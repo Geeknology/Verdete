@@ -40,7 +40,6 @@ impl ProbeData {
 
 pub struct Probe <T> where T: AddressSpace{
     address_space: T,
-    stages: Vec<Stage>,
     data: ProbeData
 }
 
@@ -48,7 +47,6 @@ impl<T> Probe<T> where T: AddressSpace {
     fn new(address_space: T) -> Probe<T>{
         return Probe {
             address_space,
-            stages: Vec::new(),
             data: ProbeData::new()
         }
     }
