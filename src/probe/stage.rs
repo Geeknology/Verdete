@@ -1,7 +1,6 @@
-use std::{borrow::{Borrow, BorrowMut}, net::IpAddr};
-use serde_json::{json, Map, Value};
+use serde_json::json;
 use crate::loader::{ResourceType, URI};
-use super::{address_space::{Address, AddressSpace, AddressSpaceFactory}, ProbeData};
+use super::{address_space::{Address, AddressSpaceFactory}, ProbeData};
 
 #[derive(Debug)]
 pub enum StageNodeError {
@@ -28,7 +27,7 @@ pub struct StageNode<'a> {
 
 impl<'a> StageNode<'a>{
     pub fn new(name: &str, stage: Stage<'a>) -> StageNode<'a> {
-        return StageNode {
+        StageNode {
             name: name.to_string(),
             stage,
             next: None
@@ -39,18 +38,18 @@ impl<'a> StageNode<'a>{
         if let Some(node) = self.next.as_ref() {
             return Some(node.as_ref())
         } else {
-            return None
+            None
         }
     }
 
     pub fn len(&self) -> usize {
         let mut cursor = self;
         let mut iterations = 1;
-        while cursor.next().is_none() == false {
+        while cursor.next().is_some() {
             cursor = cursor.next().unwrap();
             iterations += 1;
         }
-        return iterations as usize
+        iterations as usize
     }
 
     pub fn insert_node_as_next_of(&mut self, name: &str, node: StageNode<'a>) -> Result<(), StageNodeError> {
@@ -59,14 +58,14 @@ impl<'a> StageNode<'a>{
             return Ok(())
         }
         let mut cursor = self;
-        while cursor.next().is_none() == false {
+        while cursor.next().is_some() {
             if cursor.next().unwrap().name == name {
                 cursor.next.as_mut().unwrap().next = Some(Box::new(node));
                 return Ok(())
             }
             cursor = cursor.next.as_mut().unwrap().as_mut();
         }
-        return Err(StageNodeError::NodeNotFound(name.to_string()))
+        Err(StageNodeError::NodeNotFound(name.to_string()))
     }
 
     pub fn insert_node_at_index(&mut self, index: usize, node: StageNode<'a>) -> Result<(), StageNodeError> {
@@ -74,7 +73,7 @@ impl<'a> StageNode<'a>{
             self.next = Some(Box::new(node));
             return Ok(())
         }
-        let mut len = self.len();
+        let len = self.len();
         if index > len - 1 {
             return Err(StageNodeError::IndexOutOfBounds(index))
         }
@@ -85,7 +84,7 @@ impl<'a> StageNode<'a>{
             cursor = cursor.next.as_mut().unwrap().as_mut();
         }
         cursor.next = Some(Box::new(node));
-        return Ok(())
+        Ok(())
     }
 
     pub fn get_node(&self, name: &str) -> Option<&StageNode<'a>> {
@@ -93,18 +92,18 @@ impl<'a> StageNode<'a>{
             return Some(self)
         }
         let mut cursor = self;
-        while cursor.next().is_none() == false {
+        while cursor.next().is_some() {
             if cursor.next().unwrap().name == name {
                 return Some(cursor.next().unwrap())
             }
             cursor = cursor.next().unwrap()
         }
-        return None
+        None
     }
 
     pub fn append_node(&mut self, node: StageNode<'a>) {
         let mut cursor = self;
-        while cursor.next().is_none() == false {
+        while cursor.next().is_some() {
             cursor = cursor.next.as_mut().unwrap().as_mut();
         }
         cursor.next = Some(Box::new(node));
@@ -115,14 +114,14 @@ impl<'a> StageNode<'a>{
             return Err(StageNodeError::NodeNotFound(name.to_string()))
         }
         let mut cursor = self;
-        while cursor.next().is_none() == false {
+        while cursor.next().is_some() {
             if cursor.next().unwrap().name == name {
                 cursor.next = None;
                 return Ok(())
             }
             cursor = cursor.next.as_mut().unwrap().as_mut()
         }
-        return Err(StageNodeError::NodeNotFound(name.to_string()))
+        Err(StageNodeError::NodeNotFound(name.to_string()))
     }
 
     pub async fn execute(&self, probe_data: &mut ProbeData){
@@ -169,11 +168,11 @@ pub mod stage_test {
         let mut root = StageNode::new("Test", Stage::Test);
         let node_01 = StageNode::new("Test01", Stage::Test);
         root.append_node(node_01);
-        assert!(root.get_node("Test01").is_none() == false);
+        assert!(!root.get_node("Test01").is_none());
         let node_02 = StageNode::new("Test02", Stage::NodeQuery);
         root.append_node(node_02);
-        assert!(root.get_node("Test02").is_none() == false);
-        assert!(root.get_node("Test03").is_none() == true);
+        assert!(!root.get_node("Test02").is_none());
+        assert!(root.get_node("Test03").is_none());
     }
 
 
@@ -184,15 +183,15 @@ pub mod stage_test {
         let node_02 = StageNode::new("Test02", Stage::NodeQuery);
         root.append_node(node_01);
         root.append_node(node_02);
-        assert!(root.get_node("Test01").is_none() == false);
-        assert!(root.get_node("Test02").is_none() == false);
+        assert!(!root.get_node("Test01").is_none());
+        assert!(!root.get_node("Test02").is_none());
         root.del_node("Test02");
-        assert!(root.get_node("Test02").is_none() == true);
+        assert!(root.get_node("Test02").is_none());
         let node_03 = StageNode::new("Test03", Stage::NodeQuery);
         root.append_node(node_03);
         root.del_node("Test01");
-        assert!(root.get_node("Test01").is_none() == true);
-        assert!(root.get_node("Test03").is_none() == true);
+        assert!(root.get_node("Test01").is_none());
+        assert!(root.get_node("Test03").is_none());
     }
 
     #[test]
@@ -205,7 +204,7 @@ pub mod stage_test {
         root.insert_node_at_index(1, node_02);
         assert!(root.next().unwrap().next().unwrap().name == "Test02");
         let node_03 = StageNode::new("Test03", Stage::NodeQuery);
-        assert!(root.insert_node_at_index(3, node_03).is_ok() == false);
+        assert!(!root.insert_node_at_index(3, node_03).is_ok());
     }
 
     #[test]
@@ -218,7 +217,7 @@ pub mod stage_test {
         root.insert_node_as_next_of("Test01", node_02);
         assert!(root.next().unwrap().next().unwrap().name == "Test02");
         let node_03 = StageNode::new("Test03", Stage::NodeQuery);
-        assert!(root.insert_node_as_next_of("Test10", node_03).is_ok() == false);
+        assert!(!root.insert_node_as_next_of("Test10", node_03).is_ok());
     }
 
     #[test]

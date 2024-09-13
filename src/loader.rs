@@ -1,8 +1,7 @@
 use std::net::IpAddr;
-use awc::http::header::CONTENT_SECURITY_POLICY_REPORT_ONLY;
-use reqwest::{Certificate, ClientBuilder, Identity, Method, Request, RequestBuilder, Url};
+use reqwest::ClientBuilder;
 
-use crate::auth::{self, Auth};
+use crate::auth::{Auth};
 
 #[derive(Debug, Clone)]
 pub enum ResourceType <'a>{
@@ -31,11 +30,11 @@ pub struct Loader {}
 impl Loader {
 
     pub async fn load_file(path: &str) -> Result<String, LoaderError> {
-        return Ok(tokio::fs::read_to_string(path).await.unwrap())
+        Ok(tokio::fs::read_to_string(path).await.unwrap())
     }
 
     pub async fn load_http(url: &str, authentication: &Option<Auth<'_>>, verify_certificate: bool) -> Result<String, LoaderError> {
-        let mut client = ClientBuilder::new()
+        let client = ClientBuilder::new()
                                                 .danger_accept_invalid_certs(!verify_certificate)
                                                 .build()
                                                 .unwrap();
@@ -51,32 +50,32 @@ impl Loader {
                 }
                 _ => return Err(LoaderError { })
             }
-            return Ok("OK".to_string())
+            Ok("OK".to_string())
         } else {
             let res = client.get(url).send().await.unwrap();
-            return Ok(res.text().await.unwrap().to_string())
+            Ok(res.text().await.unwrap().to_string())
         }
     }
 
     pub async fn load_ftp(uri: &URI<'_>) -> Result<String, LoaderError> {
-        return Err(LoaderError {})
+        Err(LoaderError {})
     }
 
     pub async fn load_smb(uri: &URI<'_>) -> Result<String, LoaderError> {
-        return Err(LoaderError {})
+        Err(LoaderError {})
     }
 
     pub async fn load_scp(uri: &URI<'_>) -> Result<String, LoaderError> {
-        return Err(LoaderError {})
+        Err(LoaderError {})
     }
 
     pub async fn load(uri: &URI<'_>) -> Result<String, LoaderError> {
         match uri {
-            URI::File { path} => return Loader::load_file(path).await,
-            URI::HTTP { url, authentication, verify_certificate} => return Loader::load_http(url, authentication, verify_certificate.to_owned()).await,
-            URI::FTP { url, authentication } => return Loader::load_ftp(uri).await,
-            URI::SMB { path, authentication } => return Loader::load_smb(uri).await,
-            URI::SCP { server, authentication } => return Loader::load_scp(uri).await
+            URI::File { path} => Loader::load_file(path).await,
+            URI::HTTP { url, authentication, verify_certificate} => Loader::load_http(url, authentication, verify_certificate.to_owned()).await,
+            URI::FTP { url, authentication } => Loader::load_ftp(uri).await,
+            URI::SMB { path, authentication } => Loader::load_smb(uri).await,
+            URI::SCP { server, authentication } => Loader::load_scp(uri).await
         }
     }
 }

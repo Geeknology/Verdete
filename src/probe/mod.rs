@@ -9,9 +9,7 @@ mod stage;
 mod store;
 mod preprocess;
 
-use std::{any::Any, borrow::Borrow, collections::HashMap, ops::Add};
 
-use address_space::AddressSpace;
 use serde_json::{json, Map, Value};
 use stage::{Stage, StageNode, StageNodeError};
 
@@ -27,7 +25,7 @@ pub struct ProbeData {
 
 impl ProbeData {
     fn new() -> ProbeData{
-        return ProbeData {
+        ProbeData {
             address_space: Map::new(),
             stages: Map::new(),
             results: Map::new()
@@ -55,7 +53,7 @@ pub struct Probe<'a> {
 impl<'a> Probe<'a> {
     fn new(name: &'a str) -> Probe<'a>{
         return Probe {
-            name: name,
+            name,
             data: ProbeData::new(),
             stages: StageNode::new("root", Stage::Root)
         }
@@ -66,15 +64,15 @@ impl<'a> Probe<'a> {
     }
 
     fn insert_stage_at_index(&mut self, stage: StageNode<'a>, index: usize) -> Result<(), StageNodeError> {
-        return self.stages.insert_node_at_index(index, stage)
+        self.stages.insert_node_at_index(index, stage)
     }
 
     fn insert_stage_as_next_of(&mut self, stage: StageNode<'a>, previous: &str) -> Result<(), StageNodeError> {
-        return self.stages.insert_node_as_next_of(previous, stage);
+        self.stages.insert_node_as_next_of(previous, stage)
     }
 
     fn remove_stage(&mut self, name: &str) -> Result<(), StageNodeError> {
-        return self.stages.del_node(name)
+        self.stages.del_node(name)
     }
     
     fn get_stage(&mut self, name: &str) -> Option<&StageNode<'a>> {
@@ -111,22 +109,22 @@ impl<'a> Probe<'a> {
         data.insert("execution_time_avg".to_string(), json!(execution_time_avg));
         data.insert("execution_status".to_string(), json!(execution_status));
         data.insert("execution_status_code".to_string(), json!(execution_status_code));
-        return data
+        data
     }
 }
 #[cfg(test)]
 pub mod probe_test {
-    use serde_json::{json, Map, Number, Value};
-    use crate::loader::URI;
-    use crate::probe::ProbeData;
-    use super::address_space::{Address, AddressSpace, AddressSpaceFactory};
+    
+    
+    
+    
     use super::stage::{StageNode, Stage};
     use super::Probe;
 
     #[tokio::test]
     async fn probe_construction_ok(){
         let mut probe = Probe::new("Test");
-        let mut as_stage = StageNode::new("AddressSpace", Stage::AddressSpaceIpRange("192.168.0.1", "192.168.0.10"));
+        let as_stage = StageNode::new("AddressSpace", Stage::AddressSpaceIpRange("192.168.0.1", "192.168.0.10"));
         probe.append_stage(as_stage);
         println!("{:?}", probe);
         probe.execute().await;

@@ -1,4 +1,3 @@
-use std::net::Ipv4Addr;
 
 pub mod probe;
 pub mod ansible;
