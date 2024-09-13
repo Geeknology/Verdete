@@ -13,13 +13,14 @@ use std::{any::Any, borrow::Borrow, collections::HashMap, ops::Add};
 
 use address_space::AddressSpace;
 use serde_json::{json, Map, Value};
-use stage::Stage;
+use stage::{Stage, StageNode, StageNodeError};
 
 #[derive(Debug)]
 pub struct ProbeDataError {}
 
 #[derive(Debug)]
 pub struct ProbeData {
+    address_space: Map<String, Value>,
     stages: Map<String, Value>,
     results: Map<String, Value>
 }
@@ -27,6 +28,7 @@ pub struct ProbeData {
 impl ProbeData {
     fn new() -> ProbeData{
         return ProbeData {
+            address_space: Map::new(),
             stages: Map::new(),
             results: Map::new()
         }
@@ -38,31 +40,62 @@ impl ProbeData {
     }
 }
 
-pub struct Probe <T> where T: AddressSpace{
-    address_space: T,
-    data: ProbeData
+#[derive(Debug)]
+pub enum ProbeError<'a> {
+    NoAddressSpace(&'a str)
 }
 
-impl<T> Probe<T> where T: AddressSpace {
-    fn new(address_space: T) -> Probe<T>{
+#[derive(Debug)]
+pub struct Probe<'a> {
+    name: &'a str,
+    data: ProbeData,
+    stages: StageNode<'a>
+}
+
+impl<'a> Probe<'a> {
+    fn new(name: &'a str) -> Probe<'a>{
         return Probe {
-            address_space,
-            data: ProbeData::new()
+            name: name,
+            data: ProbeData::new(),
+            stages: StageNode::new("root", Stage::Root)
         }
-    }
-    
-    /*fn add_stage(&mut self, stage: Box<dyn Stage>, index: usize) {
-        self.stages.insert(index, stage);
     }
 
-    fn execute(&mut self) {
-        for i in self.stages.iter() {
-            for j in self.address_space.iter() {
-                let data = i.execute(&j, &mut self.data.results);
-                self.data.set_stage_data(i.get_name(), data).unwrap();
-            }
+    fn append_stage(&mut self, stage: StageNode<'a>) {
+        self.stages.append_node(stage);
+    }
+
+    fn insert_stage_at_index(&mut self, stage: StageNode<'a>, index: usize) -> Result<(), StageNodeError> {
+        return self.stages.insert_node_at_index(index, stage)
+    }
+
+    fn insert_stage_as_next_of(&mut self, stage: StageNode<'a>, previous: &str) -> Result<(), StageNodeError> {
+        return self.stages.insert_node_as_next_of(previous, stage);
+    }
+
+    fn remove_stage(&mut self, name: &str) -> Result<(), StageNodeError> {
+        return self.stages.del_node(name)
+    }
+    
+    fn get_stage(&mut self, name: &str) -> Option<&StageNode<'a>> {
+        return self.stages.get_node(name)
+    }
+
+    async fn execute(&mut self) -> Result<(), ProbeError> {
+        if let Some(address_space) = self.stages.get_node("AddressSpace") {
+            address_space.execute(&mut self.data).await;
+        } else {
+            return Err(ProbeError::NoAddressSpace(self.name))
         }
-    }*/
+        let mut cursor = &self.stages;
+        loop {
+            cursor.execute(&mut self.data).await;
+            if cursor.next().is_none() {
+                return Ok(())
+            }
+            cursor = cursor.next().unwrap();
+        }
+    }
 
     fn get_stage_data(&self, stage_name: &str) -> Option<&Value> {
         return self.data.stages.get(stage_name)
@@ -87,16 +120,20 @@ pub mod probe_test {
     use crate::loader::URI;
     use crate::probe::ProbeData;
     use super::address_space::{Address, AddressSpace, AddressSpaceFactory};
-    use super::stage::Stage;
+    use super::stage::{StageNode, Stage};
     use super::Probe;
-/*
+
     #[tokio::test]
     async fn probe_construction_ok(){
-        let addr_space = AddressSpaceFactory::from(URI::File { path: "/etc/verdete/json_dns_list.json" }, crate::loader::ResourceType::JSON("def.hosts")).await.unwrap();
-        let mut probe = Probe::new(Box::new(addr_space));
-        assert!(probe.stages.len() == 0);
-        assert!(probe.stages.len() == 1);
+        let mut probe = Probe::new("Test");
+        let mut as_stage = StageNode::new("AddressSpace", Stage::AddressSpaceIpRange("192.168.0.1", "192.168.0.10"));
+        probe.append_stage(as_stage);
+        println!("{:?}", probe);
+        probe.execute().await;
+        println!("{:?}", probe);
+        assert!(1 == 2);
     }
+    /*
     #[tokio::test]
     async fn probe_add_data_ok() {
         let test_stage = TestStage {
