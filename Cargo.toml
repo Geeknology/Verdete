@@ -21,3 +21,4 @@ base64 = "0.22.1"
 awc = "3.5.1"
 toml = "0.8.19"
 csv = "1.3.0"
+serde = { version = "1.0.210", features = ["derive"] }

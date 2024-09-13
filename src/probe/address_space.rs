@@ -3,6 +3,7 @@ use std::{any::Any, collections::BTreeMap, net::{IpAddr, Ipv4Addr, Ipv6Addr}, op
 use awc::http::header::DNT;
 use ldap3::{LdapConn, SearchEntry};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{Error, Value};
 use serde_json_path::JsonPath;
 use yaml_path::Path;
@@ -18,7 +19,7 @@ pub struct AddressSpaceError{}
 pub trait AddressSpace{
     fn iter(&mut self) -> impl Iterator<Item = Address>;
 }
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AddressSpaceIpRange{
     start: Address,
     end: Address,
@@ -68,7 +69,7 @@ impl AddressSpace for AddressSpaceIpRange{
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AddressSpaceAddrList {
     pub addrs: Vec<Address>,
     curr: usize,
@@ -113,7 +114,7 @@ impl AddressSpace for AddressSpaceAddrList{
 }
 
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Address {
     Ipv4(Ipv4Addr),
     Ipv6(Ipv6Addr),

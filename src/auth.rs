@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Auth<'a> {
     Basic {username: &'a str, password: &'a str},
     Kerberos {username: &'a str, password: &'a str},

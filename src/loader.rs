@@ -4,7 +4,7 @@ use reqwest::{Certificate, ClientBuilder, Identity, Method, Request, RequestBuil
 
 use crate::auth::{self, Auth};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ResourceType <'a>{
     JSON(&'a str),
     YAML(&'a str),
@@ -13,10 +13,10 @@ pub enum ResourceType <'a>{
     XLSX
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LoaderError {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum URI <'a>{
     File {path: &'a str},
     HTTP {url: &'a str, authentication: Option<Auth<'a>>, verify_certificate: bool},
