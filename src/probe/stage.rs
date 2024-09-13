@@ -1,79 +1,22 @@
-use std::borrow::{Borrow, BorrowMut};
-
-use serde_json::{Map, Value};
-
+use std::{borrow::{Borrow, BorrowMut}, net::IpAddr};
+use serde_json::{json, Map, Value};
 use crate::loader::{ResourceType, URI};
-
-use super::address_space::{Address, AddressSpace};
+use super::{address_space::{Address, AddressSpace, AddressSpaceFactory}, ProbeData};
 
 #[derive(Debug)]
-pub enum StageTreeError{
-    NodeNotFound(String)
+pub enum StageNodeError {
+    NodeNotFound(String),
+    IndexOutOfBounds(usize)
 }
 
 #[derive(Debug)]
-pub struct StageTree<'a> {
-    root: StageNode<'a>,
-    len: usize
-}
-
-impl<'a> StageTree<'a> {
-    pub fn new() -> StageTree<'a> {
-        return StageTree {
-            root: StageNode::new("root", Stage::Root),
-            len: 0
-        }
-    }
-
-    pub fn get_node(&self, name: String) -> Result<&'a StageNode<'a>, StageTreeError> {
-        let len = self.len();
-        let mut cursor = &mut self.root;
-        let mut iterations = 0;
-        while cursor.next().is_none() == false{
-            if iterations >= len {
-                return Err(StageTreeError::NodeNotFound(name))
-            }
-            if cursor.next().unwrap().name == name {
-                return Ok(cursor.next().unwrap())
-            }
-            cursor = cursor.next().unwrap();
-            iterations += 1;
-        }
-        return Err(StageTreeError::NodeNotFound(name))
-    }
-
-    pub fn append_node(&mut self, node: StageNode<'a>){
-        let len = self.len();
-        let mut cursor = &mut self.root;
-        for _ in 0..len {
-            cursor = cursor.next().unwrap();
-        }
-        cursor.set_next(node);
-        self.len += 1;
-    }
-
-    pub fn del_node(&mut self, name: String) -> Result<(), StageTreeError>{
-        let len = self.len();
-        let mut cursor = &mut self.root;
-        let mut iterations = 0;
-        while cursor.next().is_none() == false{
-            if iterations >= len {
-                return Err(StageTreeError::NodeNotFound(name))
-            }
-            cursor = cursor.next().unwrap();
-            iterations += 1;
-            if cursor.next().unwrap().name == name {
-                cursor.del_next();
-                self.len -= 1;
-                return Ok(())
-            }
-        }
-        return Err(StageTreeError::NodeNotFound(name))
-    }
-
-    pub fn len(&self) -> usize {
-        return self.len
-    }
+pub enum Stage<'a>{
+    Test,
+    Root,
+    NodeQuery,
+    AddressSpace(URI<'a>, ResourceType<'a>),
+    AddressSpaceIpRange(&'a str, &'a str),
+    AgentQuery
 }
 
 #[derive(Debug)]
@@ -83,7 +26,7 @@ pub struct StageNode<'a> {
     next: Option<Box<StageNode<'a>>>
 }
 
-impl<'a> StageNode<'a> {
+impl<'a> StageNode<'a>{
     pub fn new(name: &str, stage: Stage<'a>) -> StageNode<'a> {
         return StageNode {
             name: name.to_string(),
@@ -92,72 +35,190 @@ impl<'a> StageNode<'a> {
         }
     }
 
-    pub fn next(&mut self) -> Option<&mut StageNode<'a>> {
-        if let Some(next) = self.next.as_mut() {
-            return Some(self.next.as_mut().unwrap().as_mut())
-        }else {
+    pub fn next(&self) -> Option<&StageNode<'a>> {
+        if let Some(node) = self.next.as_ref() {
+            return Some(node.as_ref())
+        } else {
             return None
         }
     }
 
-    pub fn set_next(&mut self, node: StageNode<'a>) {
-        self.next = Some(Box::new(node));
+    pub fn len(&self) -> usize {
+        let mut cursor = self;
+        let mut iterations = 1;
+        while cursor.next().is_none() == false {
+            cursor = cursor.next().unwrap();
+            iterations += 1;
+        }
+        return iterations as usize
     }
 
-    pub fn del_next(&mut self) {
-        self.next = None;
+    pub fn insert_node_as_next_of(&mut self, name: &str, node: StageNode<'a>) -> Result<(), StageNodeError> {
+        if self.name == name {
+            self.next = Some(Box::new(node));
+            return Ok(())
+        }
+        let mut cursor = self;
+        while cursor.next().is_none() == false {
+            if cursor.next().unwrap().name == name {
+                cursor.next.as_mut().unwrap().next = Some(Box::new(node));
+                return Ok(())
+            }
+            cursor = cursor.next.as_mut().unwrap().as_mut();
+        }
+        return Err(StageNodeError::NodeNotFound(name.to_string()))
     }
-}
 
-#[derive(Debug)]
-pub enum Stage<'a>{
-    AddressSpace(URI<'a>, ResourceType<'a>),
-    Root,
-    NodeQuery,
-    AgentQuery,
-    Passive,
-    AutoReg,
-    ExternalQuery,
-    Filter,
-    Reduce,
-    Conditional,
-    Preprocess,
-    Store,
+    pub fn insert_node_at_index(&mut self, index: usize, node: StageNode<'a>) -> Result<(), StageNodeError> {
+        if index == 0 {
+            self.next = Some(Box::new(node));
+            return Ok(())
+        }
+        let mut len = self.len();
+        if index > len - 1 {
+            return Err(StageNodeError::IndexOutOfBounds(index))
+        }
+        let mut cursor = self;
+        let mut iterations = 0;
+        while iterations < index {
+            iterations += 1;
+            cursor = cursor.next.as_mut().unwrap().as_mut();
+        }
+        cursor.next = Some(Box::new(node));
+        return Ok(())
+    }
+
+    pub fn get_node(&self, name: &str) -> Option<&StageNode<'a>> {
+        if self.name == name {
+            return Some(self)
+        }
+        let mut cursor = self;
+        while cursor.next().is_none() == false {
+            if cursor.next().unwrap().name == name {
+                return Some(cursor.next().unwrap())
+            }
+            cursor = cursor.next().unwrap()
+        }
+        return None
+    }
+
+    pub fn append_node(&mut self, node: StageNode<'a>) {
+        let mut cursor = self;
+        while cursor.next().is_none() == false {
+            cursor = cursor.next.as_mut().unwrap().as_mut();
+        }
+        cursor.next = Some(Box::new(node));
+    }
+
+    pub fn del_node(&mut self, name: &str) -> Result<(), StageNodeError> {
+        if self.name == name {
+            return Err(StageNodeError::NodeNotFound(name.to_string()))
+        }
+        let mut cursor = self;
+        while cursor.next().is_none() == false {
+            if cursor.next().unwrap().name == name {
+                cursor.next = None;
+                return Ok(())
+            }
+            cursor = cursor.next.as_mut().unwrap().as_mut()
+        }
+        return Err(StageNodeError::NodeNotFound(name.to_string()))
+    }
+
+    pub async fn execute(&self, probe_data: &mut ProbeData){
+        println!("Stage {:?} being executed", self.name);
+        match &self.stage {
+            Stage::AddressSpace(a, b) => {
+                probe_data.address_space["type"] = json!("address_list");
+                probe_data.address_space["addressess"] = json!(AddressSpaceFactory::from(a.clone(), b.clone()).await.unwrap());
+            },
+            Stage::AddressSpaceIpRange(a, b) => {
+                probe_data.address_space.insert("type".to_string(), json!("ip_range".to_string()));
+                probe_data.address_space.insert("addresses".to_string(), json!(AddressSpaceFactory::ip_range(Address::from_str(a).unwrap(), Address::from_str(b).unwrap())));
+            },
+            Stage::Root => {
+                println!("I'm the root node");
+            },
+            _ => panic!("Not Implemented Yet")
+        }
+    }
 }
 
 #[cfg(test)]
 pub mod stage_test {
-    use super::{Stage, StageNode, StageTree};
+    use super::{Stage, StageNode};
+
 
     #[test]
     fn stage_list_iteration_is_ok(){}
 
     #[test]
     fn stage_list_add_node_is_ok(){
-        let mut tree = StageTree::new();
-        let mut node_01 = StageNode::new("Test", Stage::AgentQuery);
-        tree.append_node(node_01);
-        assert!(tree.root.next().unwrap().name == "Test");
-        let mut node_02 = StageNode::new("Test02", Stage::AgentQuery);
-        tree.append_node(node_02);
-        assert!(tree.root.next().unwrap().next().unwrap().name == "Test02");}
+        let mut root = StageNode::new("Test", Stage::Test);
+        let node_01 = StageNode::new("Test01", Stage::Test);
+        root.append_node(node_01);
+        assert!(root.next().unwrap().name == "Test01");
+        let node_02 = StageNode::new("Test02", Stage::NodeQuery);
+        root.append_node(node_02);
+        assert!(root.next().unwrap().next().unwrap().name == "Test02");
+    }
 
-    #[test]
-    fn stage_list_del_node_is_ok(){}
-
+    
     #[test]
     fn stage_list_get_node_by_name_is_ok(){
-        let mut tree = StageTree::new();
-        let mut node_01 = StageNode::new("Test01", Stage::AgentQuery);
-        let mut node_02 = StageNode::new("Test02", Stage::AgentQuery);
-        let mut node_03 = StageNode::new("Test03", Stage::AgentQuery);
-        tree.append_node(node_01);
-        tree.append_node(node_02);
-        tree.append_node(node_03);
-        assert!(tree.get_node("Test01".to_string()).next().unwrap().name == "Test02");
-        assert!(tree.get_node("Test02".to_string()).next().unrwap().name == "Test03");
-        assert!(tree.get_node("Test03".to_string()).next().is_none() == true);
-        assert!(tree.get_node("Test04".to_string()).is_ok() == false);
+        let mut root = StageNode::new("Test", Stage::Test);
+        let node_01 = StageNode::new("Test01", Stage::Test);
+        root.append_node(node_01);
+        assert!(root.get_node("Test01").is_none() == false);
+        let node_02 = StageNode::new("Test02", Stage::NodeQuery);
+        root.append_node(node_02);
+        assert!(root.get_node("Test02").is_none() == false);
+        assert!(root.get_node("Test03").is_none() == true);
+    }
+
+
+    #[test]
+    fn stage_list_del_node_is_ok(){
+        let mut root = StageNode::new("Test", Stage::Test);
+        let node_01 = StageNode::new("Test01", Stage::Test);
+        let node_02 = StageNode::new("Test02", Stage::NodeQuery);
+        root.append_node(node_01);
+        root.append_node(node_02);
+        assert!(root.get_node("Test01").is_none() == false);
+        assert!(root.get_node("Test02").is_none() == false);
+        root.del_node("Test02");
+        assert!(root.get_node("Test02").is_none() == true);
+        let node_03 = StageNode::new("Test03", Stage::NodeQuery);
+        root.append_node(node_03);
+        root.del_node("Test01");
+        assert!(root.get_node("Test01").is_none() == true);
+        assert!(root.get_node("Test03").is_none() == true);
+    }
+
+    #[test]
+    fn stage_insert_node_at_index() {
+        let mut root = StageNode::new("Test", Stage::Test);
+        let node_01 = StageNode::new("Test01", Stage::Test);
+        let node_02 = StageNode::new("Test02", Stage::NodeQuery);
+        root.insert_node_at_index(0, node_01);
+        assert!(root.next().unwrap().name == "Test01");
+        root.insert_node_at_index(1, node_02);
+        assert!(root.next().unwrap().next().unwrap().name == "Test02");
+        let node_03 = StageNode::new("Test03", Stage::NodeQuery);
+        assert!(root.insert_node_at_index(3, node_03).is_ok() == false);
+    }
+
+    #[test]
+    fn stage_insert_node_after() {
+        let mut root = StageNode::new("Test", Stage::Test);
+        let node_01 = StageNode::new("Test01", Stage::Test);
+        let node_02 = StageNode::new("Test02", Stage::NodeQuery);
+        root.insert_node_as_next_of("Test", node_01);
+        assert!(root.next().unwrap().name == "Test01");
+        root.insert_node_as_next_of("Test01", node_02);
+        assert!(root.next().unwrap().next().unwrap().name == "Test02");
+        let node_03 = StageNode::new("Test03", Stage::NodeQuery);
+        assert!(root.insert_node_as_next_of("Test10", node_03).is_ok() == false);
     }
 
     #[test]
